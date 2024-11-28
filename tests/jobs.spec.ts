@@ -1,4 +1,7 @@
 import { test, expect } from "@playwright/test";
+import TurndownService from 'turndown';
+const turndownService = new TurndownService();
+
 
 test("CLICK 1ST JOB LINK", async ({ page }) => {
   await page.goto("https://www.jobs.ch/en/vacancies/?region=2&term=");
@@ -32,8 +35,10 @@ test("TEST 1", async ({ page }) => {
       const jobUrl = await jobLink.getAttribute("href");
 
       await jobLink.click();
-      const jobContent = page.locator('[data-cy="vacancy-description"]');
-
+      const jobContentLocator = page.locator('[data-cy="vacancy-description"]');
+      const jobContentHTML = await jobContentLocator.first().innerHTML();
+      const jobContentMD = turndownService.turndown(jobContentHTML);
+      
       return {
         published: lines[0].replace("Published: ", "").trim(),
         // date: lines[1].trim(),
@@ -43,12 +48,13 @@ test("TEST 1", async ({ page }) => {
         contract: lines[5].trim(),
         company: lines[6].trim(),
         url: 'jobs.ch' + jobUrl,
+        description: jobContentMD,
       };
     }),
   );
 
   // const jobLink = searchedJobs.getByRole('link').click();
-  // console.log(JSON.stringify(sortJobs, null, 2));
+  console.log(JSON.stringify(sortJobs, null, 2));
 });
 
 test.describe("JOBS TEST", () => {
