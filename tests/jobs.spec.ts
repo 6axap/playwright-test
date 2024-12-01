@@ -1,23 +1,78 @@
 import { test, expect } from "@playwright/test";
 import TurndownService from 'turndown';
+import sqlite3 from 'better-sqlite3';
 const turndownService = new TurndownService();
 
+// Initialize the database (creates `jobs.db` if it doesn't exist)
+const db = sqlite3('jobs.db');
 
-test("CLICK 1ST JOB LINK", async ({ page }) => {
+// Function to create the jobs table
+const createJobsTable = () => {
+  const createTableQuery = `
+    CREATE TABLE IF NOT EXISTS jobs (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      title TEXT NOT NULL,
+      location TEXT NOT NULL,
+      company TEXT NOT NULL,
+      workload TEXT,
+      contract TEXT,
+      published DATETIME NOT NULL,
+      url TEXT NOT NULL UNIQUE,
+      description TEXT NOT NULL
+    );
+  `;
+  db.exec(createTableQuery);
+  console.log('Table "jobs" is set up.');
+};
+
+// Call the function to set up the database
+createJobsTable();
+
+interface Job {
+  title: string;
+  location: string;
+  company: string;
+  workload: string;
+  contract: string;
+  published: Date;
+  url: string;
+  description: string;
+}
+
+const insertJob = (job: Job) => {
+  const insertQuery = `
+    INSERT OR IGNORE INTO jobs 
+    (title, location, company, workload, contract, published, url, description) 
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+  `;
+  try {
+    const stmt = db.prepare(insertQuery);
+    const result = stmt.run(
+      job.title,
+      job.location,
+      job.company,
+      job.workload,
+      job.contract,
+      job.published.toISOString(),
+      job.url,
+      job.description
+    );
+    
+    if (result.changes === 0) {
+      console.log(`Skipped duplicate job: ${job.title} (${job.url})`);
+    } else {
+      console.log(`Job inserted: ${job.title}`);
+    }
+  } catch (error) {
+    console.error('Error inserting job:', error.message);
+  }
+};
+
+// add pagination
+// OpenAI API - Sort viable JOBS
+test("SCRAPE JOBS ON PAGE", async ({ page }) => {
   await page.goto("https://www.jobs.ch/en/vacancies/?region=2&term=");
-  const searchedJobs = page.locator('[data-feat="searched_jobs"]');
-  const jobLink = searchedJobs.locator('[data-cy="job-link"]');
-
-  await jobLink.first().waitFor(); // Wait for locator to be visible
-  await jobLink.first().click();
-  const jobUrl = await jobLink.first().getAttribute("href");
-  console.log("jobUrl", jobUrl);
-});
-
-test("TEST 1", async ({ page }) => {
-  await page.goto("https://www.jobs.ch/en/vacancies/?region=2&term=");
-  const searchedJobs = page.locator('[data-feat="searched_jobs"]');
-  // const jobListTexts = await searchedJobs.allInnerTexts();
+  const searchedJobs = page.locator('[data-feat="searched_jobs"]'); // Locate SearchedJobs
   const jobLocators = await searchedJobs.all();
 
   const sortJobs = await Promise.all(
@@ -39,51 +94,33 @@ test("TEST 1", async ({ page }) => {
       const jobContentHTML = await jobContentLocator.first().innerHTML();
       const jobContentMD = turndownService.turndown(jobContentHTML);
       
-      return {
-        published: lines[0].replace("Published: ", "").trim(),
-        // date: lines[1].trim(),
+      // Parse the date string properly
+      const publishedStr = lines[0].replace("Published: ", "").trim();
+      const publishedDate = new Date(publishedStr);
+      
+      // Create job object
+      const job: Job = {
+        published: publishedDate,
         title: lines[2].trim(),
         location: lines[3].trim(),
         workload: lines[4].trim(),
         contract: lines[5].trim(),
         company: lines[6].trim(),
-        url: 'jobs.ch' + jobUrl,
+        url: `https://www.jobs.ch${jobUrl}`,  // Fix URL format
         description: jobContentMD,
       };
+
+      // Insert job into database
+      insertJob(job);
+      return job;
     }),
   );
 
-  // const jobLink = searchedJobs.getByRole('link').click();
-  console.log(JSON.stringify(sortJobs, null, 2));
+  console.log(`Processed ${sortJobs.length} jobs`);
 });
 
-test.describe("JOBS TEST", () => {
-  test("TEST STABLE", async ({ page }) => {
-    await page.goto("https://www.jobs.ch/en/vacancies/?region=2&term=");
-
-    // const boostedJobs = page.locator('[data-feat="boosted_jobs"]');
-    // const jobList = await searchedJobs.or(boostedJobs).allInnerTexts();
-    const searchedJobs = page.locator('[data-feat="searched_jobs"]');
-    const jobListTexts = await searchedJobs.allInnerTexts();
-    const jobListLocators = await searchedJobs.all();
-    console.log("jobList all", jobListLocators);
-    console.log("jobList allInnerTxts", jobListTexts);
-    // const array: string[] = [];
-
-    const structuredJobList = jobListTexts.map((item) => {
-      const lines = item.split("\n").filter((line) => line.trim() !== ""); // Remove empty lines
-      return {
-        published: lines[0].replace("Published: ", "").trim(),
-        // date: lines[1].trim(),
-        title: lines[2].trim(),
-        location: lines[3].trim(),
-        workload: lines[4].trim(),
-        contract: lines[5].trim(),
-        company: lines[6].trim(),
-      };
-    });
-
-    // const jobLink = searchedJobs.getByRole('link').click();
-    // console.log(JSON.stringify(structuredJobList, null, 2));
-  });
+process.on('exit', () => {
+  db.close();
+  console.log('Database connection closed.');
 });
+
