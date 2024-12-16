@@ -3,8 +3,10 @@ node_modules/
 /playwright-report/
 /blob-report/
 /playwright/.cache/
+/jobs/
 
 .DS_Store
 jobs.db
 index.md
 Session.vim
+.env
