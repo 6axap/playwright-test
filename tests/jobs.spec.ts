@@ -1,6 +1,6 @@
 import { test, expect } from "@playwright/test";
 import TurndownService from "turndown";
-import sqlite3 from "better-sqlite3";
+import { Pool } from 'pg';
 import OpenAI from "openai";
 import dotenv from "dotenv";
 import fs from "fs";
@@ -22,29 +22,13 @@ const jobRankingSchema = z.object({
 });
 
 // Initialize the database (creates `jobs.db` if it doesn't exist)
-const db = sqlite3("jobs.db");
-
-// Function to create the jobs table
-/* const createJobsTable = () => {
-  const createTableQuery = `
-    CREATE TABLE IF NOT EXISTS jobs (
-      id INTEGER PRIMARY KEY AUTOINCREMENT,
-      title TEXT NOT NULL,
-      location TEXT NOT NULL,
-      company TEXT NOT NULL,
-      workload TEXT,
-      contract TEXT,
-      published DATETIME NOT NULL,
-      url TEXT NOT NULL UNIQUE,
-      description TEXT NOT NULL,
-      ranking TEXT NOT NULL,
-      canton TEXT NOT NULL,
-      categories TEXT NOT NULL
-    );
-  `;
-  db.exec(createTableQuery);
-  console.log('Table "jobs" is set up.');
-}; */
+const pool = new Pool({
+  user: process.env.PGUSER,
+  host: process.env.PGHOST,
+  database: process.env.PGDATABASE,
+  password: process.env.PGPASSWORD,
+  port: parseInt(process.env.PGPORT || '5432'),
+});
 
 const addNewColumns = () => {
   const alterTableQuery = `
@@ -104,15 +88,17 @@ interface JobRanking {
   canton: string;
 }
 
-const insertJob = (job: Job) => {
+const insertJob = async (job: Job) => {
   const insertQuery = `
-    INSERT OR IGNORE INTO jobs 
+    INSERT INTO jobs 
     (title, location, company, workload, contract, published, url, description, ranking, canton, categories) 
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+    ON CONFLICT (url) DO NOTHING
+    RETURNING *
   `;
+  
   try {
-    const stmt = db.prepare(insertQuery);
-    const result = stmt.run(
+    const result = await pool.query(insertQuery, [
       job.title,
       job.location,
       job.company,
@@ -124,15 +110,16 @@ const insertJob = (job: Job) => {
       job.ranking,
       job.canton,
       job.categories.join(", ")
-    );
+    ]);
 
-    if (result.changes === 0) {
+    if (result.rowCount === 0) {
       console.log(`⚠️ duplicate: ${job.title}`);
-    } else {
-      // console.log(`> inserted: ${job.title}`);
+      return { isDuplicate: true };
     }
+    return { isDuplicate: false };
   } catch (error) {
     console.error("Error inserting job:", error.message);
+    return { isDuplicate: false, error: error.message };
   }
 };
 
@@ -312,8 +299,8 @@ test("SCRAPE JOBS ON PAGE", async ({ page }) => {
   console.log(`Finished scraping. Total jobs processed: ${totalJobs}`);
 });
 
-process.on("exit", () => {
-  db.close();
+process.on("exit", async () => {
+  await pool.end();
   console.log("Database connection closed.");
 });
 
